@@ -512,6 +512,7 @@ def draw_and_export_tables(effort: int = 0, cores: int = 1, filename: str | None
         max_splits = 3
         shoes_to_test = 500
         shoes_for_split = 200
+    card_numbers = tuple(filter(lambda number: number <= 4 * number_of_decks - 1, card_numbers))
 
     fig, ax = plt.subplots(dpi=200)
 
