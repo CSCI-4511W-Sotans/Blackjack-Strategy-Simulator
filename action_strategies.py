@@ -415,10 +415,226 @@ class PerfectMover(BaseMover):
         return str(profits[1]), profits[2] > 0  # profit[1] is a string. str is there for mypy.
 
 class MCTSMover(BaseMover):
-"""
-Selects an action using the monte-carlo-search-tree
-"""
-return 0
+    """
+    Selects an action using a simple Monte Carlo tree search style
+    policy evaluation.
+
+    For each legal player action from the current state, this mover
+    runs a number of random rollouts and estimates the expected value
+    of that action. The move with the highest average return is
+    selected.
+    """
+
+    # Number of simulated rollouts per action
+    NUM_SIMULATIONS = 200
+
+    # Maximum depth (number of additional decision points) explored
+    # in a single rollout after the initial action.
+    MAX_ROLLOUT_DEPTH = 3
+
+    @staticmethod
+    def get_move(
+        hand_value: int,
+        hand_has_ace: bool,
+        dealer_up_card: int,
+        can_double: bool,
+        can_split: bool,
+        can_surrender: bool,
+        can_insure: bool,
+        hand_cards: list[int],
+        cards_seen: list[int],
+        deck_number: int,
+        dealer_peeks_for_blackjack: bool,
+        das: bool,
+        dealer_stands_soft_17: bool
+    ) -> tuple[str, bool]:
+        """
+        Choose a move using Monte Carlo simulation.
+
+        We approximate the value of each action by simulating random
+        continuations of the hand and using ExpectimaxMover.evaluate_state
+        as a heuristic terminal evaluation.
+        """
+
+        # Build remaining deck (same card model as ExpectimaxMover)
+        full_deck: list[int] = []
+        for _ in range(deck_number):
+            full_deck.extend([2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10, 11])
+
+        deck_counter: Counter[int] = Counter(full_deck)
+        for c in cards_seen:
+            if deck_counter[c] > 0:
+                deck_counter[c] -= 1
+
+        def sample_card(local_deck: Counter[int]) -> tuple[int | None, Counter[int]]:
+            """
+            Sample a single card from the current deck counter.
+
+            Returns the drawn card (or None if the deck is empty) and
+            the updated deck counter.
+            """
+            total_cards = sum(local_deck.values())
+            if total_cards == 0:
+                return None, local_deck
+
+            rnd = random.uniform(0, total_cards)
+            cumulative = 0.0
+            for card, count in local_deck.items():
+                if count <= 0:
+                    continue
+                cumulative += count
+                if rnd <= cumulative:
+                    new_deck = local_deck.copy()
+                    new_deck[card] -= 1
+                    return card, new_deck
+
+            # Fallback (should not happen)
+            return None, local_deck
+
+        def apply_card(total: int, usable_ace: bool, card: int) -> tuple[int, bool]:
+            """
+            Update (total, usable_ace) after drawing a card.
+            """
+            total += card
+            if card == 11:
+                usable_ace = True
+            if total > 21 and usable_ace:
+                total -= 10
+                usable_ace = False
+            return total, usable_ace
+
+        def rollout(
+            total: int,
+            usable_ace: bool,
+            local_deck: Counter[int],
+            depth_left: int
+        ) -> float:
+            """
+            Default rollout policy: keep hitting while below 17 and we
+            still have depth left; otherwise stand and evaluate.
+            """
+            # Terminal conditions
+            if total > 21 or depth_left <= 0:
+                return ExpectimaxMover.evaluate_state(
+                    total,
+                    usable_ace,
+                    dealer_up_card,
+                    hand_cards,
+                    cards_seen,
+                    deck_number,
+                    dealer_peeks_for_blackjack,
+                    das,
+                    dealer_stands_soft_17,
+                )
+
+            # Simple policy: stand on 17+, otherwise hit once and recurse.
+            if total >= 17:
+                return ExpectimaxMover.evaluate_state(
+                    total,
+                    usable_ace,
+                    dealer_up_card,
+                    hand_cards,
+                    cards_seen,
+                    deck_number,
+                    dealer_peeks_for_blackjack,
+                    das,
+                    dealer_stands_soft_17,
+                )
+
+            # HIT
+            card, new_deck = sample_card(local_deck)
+            if card is None:
+                # No cards left to draw; evaluate current hand.
+                return ExpectimaxMover.evaluate_state(
+                    total,
+                    usable_ace,
+                    dealer_up_card,
+                    hand_cards,
+                    cards_seen,
+                    deck_number,
+                    dealer_peeks_for_blackjack,
+                    das,
+                    dealer_stands_soft_17,
+                )
+
+            new_total, new_usable = apply_card(total, usable_ace, card)
+            return rollout(new_total, new_usable, new_deck, depth_left - 1)
+
+        # Enumerate legal actions from this state
+        action_candidates: list[str] = ["s", "h"]
+        if can_double:
+            action_candidates.append("d")
+        if can_surrender:
+            action_candidates.append("u")
+
+        # We ignore insurance decisions here and always return insure=False.
+        best_action = "s"
+        best_value = -math.inf
+
+        for action in action_candidates:
+            total_return = 0.0
+
+            for _ in range(MCTSMover.NUM_SIMULATIONS):
+                # Fresh copy of state and deck for each simulation
+                total = hand_value
+                usable_ace = hand_has_ace
+                local_deck = deck_counter.copy()
+
+                if action == "s":
+                    sim_value = ExpectimaxMover.evaluate_state(
+                        total,
+                        usable_ace,
+                        dealer_up_card,
+                        hand_cards,
+                        cards_seen,
+                        deck_number,
+                        dealer_peeks_for_blackjack,
+                        das,
+                        dealer_stands_soft_17,
+                    )
+                elif action in ("h", "d"):
+                    # Take one card, then continue rollout.
+                    first_card, new_deck = sample_card(local_deck)
+                    if first_card is None:
+                        sim_value = ExpectimaxMover.evaluate_state(
+                            total,
+                            usable_ace,
+                            dealer_up_card,
+                            hand_cards,
+                            cards_seen,
+                            deck_number,
+                            dealer_peeks_for_blackjack,
+                            das,
+                            dealer_stands_soft_17,
+                        )
+                    else:
+                        total, usable_ace = apply_card(total, usable_ace, first_card)
+                        sim_value = rollout(
+                            total,
+                            usable_ace,
+                            new_deck,
+                            MCTSMover.MAX_ROLLOUT_DEPTH - 1,
+                        )
+
+                    # Doubling roughly doubles the stake; scale value
+                    if action == "d":
+                        sim_value *= 2.0
+                elif action == "u":
+                    # Assume surrender loses half a unit.
+                    sim_value = -0.5
+                else:
+                    sim_value = 0.0
+
+                total_return += sim_value
+
+            avg_return = total_return / float(MCTSMover.NUM_SIMULATIONS)
+
+            if avg_return > best_value:
+                best_value = avg_return
+                best_action = action
+
+        # We are not modeling insurance in this mover, so always False.
+        return best_action, False
 
 
 class ExpectimaxMover(BaseMover):
