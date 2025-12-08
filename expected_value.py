@@ -596,7 +596,7 @@ if __name__ == "__main__":
 
     if args.custom:
         # ADD CUSTOM CODE HERE IF YOU HAVE BUILT YOUR OWN MOVER OR BETTER.
-        mover = ExpectimaxMover()  # Replace BaseMover with your own class.
+        mover = MCTSMover()  # Replace BaseMover with your own class. 123
         better = SimpleBetter()  # Replace BaseBetter with your own class.
     else:
         mover, better = get_mover_and_better(args.mover, args.better)
