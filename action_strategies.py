@@ -414,6 +414,13 @@ class PerfectMover(BaseMover):
                                       can_surrender, int(can_split), dealer_peeks_for_blackjack, das, dealer_stands_soft_17)
         return str(profits[1]), profits[2] > 0  # profit[1] is a string. str is there for mypy.
 
+class MCTSMover(BaseMover):
+"""
+Selects an action using the monte-carlo-search-tree
+"""
+return 0
+
+
 class ExpectimaxMover(BaseMover):
     """
     Selects an action using a depth-limited Expectimax search over
